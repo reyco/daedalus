@@ -67,7 +67,8 @@ main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
 
-  pr <- isJust <$> pullRequestFromEnv
+  -- pr <- isJust <$> pullRequestFromEnv
+  let pr = False
   cfg <- installerConfigFromEnv
 
   unless pr $ createDummyCertificate signingConfig
