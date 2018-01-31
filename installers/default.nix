@@ -2,4 +2,11 @@ with (import (fetchTarball https://github.com/NixOS/nixpkgs/archive/56ebd9129956
 
 with haskell.lib;
 
-justStaticExecutables (haskell.packages.ghc802.callPackage ./cardano-installer.nix {})
+let
+
+  drv = justStaticExecutables (haskell.packages.ghc802.callPackage ./cardano-installer.nix {});
+
+in
+
+  if pkgs.lib.inNixShell then drv.env else drv
+
