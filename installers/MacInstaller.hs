@@ -1,5 +1,10 @@
+{-# LANGUAGE RecordWildCards, LambdaCase #-}
 module MacInstaller
     ( main
+    , SigningConfig(..)
+    , signingConfig
+    , setupKeyChain
+    , deleteKeyChain
     ) where
 
 ---
@@ -8,14 +13,15 @@ module MacInstaller
 
 import           Universum
 
-import           Control.Monad (unless)
-import           Data.Maybe (fromMaybe)
+import           Control.Monad (unless, liftM2)
+import           Data.Maybe (fromMaybe, isJust)
 import qualified Data.Text as T
 import           System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, renameFile)
 import           System.Environment (lookupEnv)
 import           System.FilePath ((</>), FilePath)
 import           System.FilePath.Glob (glob)
-import           Turtle (ExitCode (..), echo, procs, shell, shells, Managed, with)
+import           Filesystem.Path.CurrentOS (encodeString)
+import           Turtle (ExitCode (..), echo, proc, procs, which, Managed, with)
 import           Turtle.Line (unsafeTextToLine)
 
 import           Launcher
@@ -32,21 +38,16 @@ data InstallerConfig = InstallerConfig {
   , appRoot :: String
 }
 
-setupKeychain :: IO ()
-setupKeychain = do
-  -- Sign the installer with a special macOS dance
-  run "security" ["create-keychain", "-p", "travis", "macos-build.keychain"]
-  run "security" ["default-keychain", "-s", "macos-build.keychain"]
-  exitcode <- shell "security import macos.p12 -P \"$CERT_PASS\" -k macos-build.keychain -T `which productsign`" mempty
-  unless (exitcode == ExitSuccess) $ error "Signing failed"
-  run "security" ["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", "travis", "macos-build.keychain"]
-  run "security" ["unlock-keychain", "-p", "travis", "macos-build.keychain"]
-
-isPullRequestFromEnv :: IO Bool
-isPullRequestFromEnv = interpret <$> lookupEnv "TRAVIS_PULL_REQUEST"
+-- In both Travis and Buildkite, the environment variable is set to
+-- the pull request number if the current job is a pull request build,
+-- or "false" if it’s not.
+pullRequestFromEnv :: IO (Maybe String)
+pullRequestFromEnv = liftM2 (<|>) (getPR "BUILDKITE_PULL_REQUEST") (getPR "TRAVIS_PULL_REQUEST")
   where
-    interpret (Just "false") = False
-    interpret _              = True
+    getPR = fmap interpret . lookupEnv
+    interpret Nothing        = Nothing
+    interpret (Just "false") = Nothing
+    interpret (Just num)     = Just num
 
 installerConfigFromEnv :: IO InstallerConfig
 installerConfigFromEnv = mkEnv <$> envAPI <*> envVersion
@@ -66,11 +67,10 @@ main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
 
-  pr <- isPullRequestFromEnv
-
-  unless pr setupKeychain
-
+  pr <- isJust <$> pullRequestFromEnv
   cfg <- installerConfigFromEnv
+
+  unless pr $ createDummyCertificate signingConfig
 
   tempInstaller <- makeInstaller cfg
 
@@ -79,7 +79,7 @@ main = do
       echo "Pull request, not signing the installer."
       run "cp" [toText tempInstaller, pkg cfg]
     else do
-      signInstaller (toText tempInstaller) (pkg cfg)
+      signInstaller signingConfig (toText tempInstaller) (pkg cfg)
 
   run "rm" [toText tempInstaller]
   echo $ "Generated " <> unsafeTextToLine (pkg cfg)
@@ -187,18 +187,81 @@ doLauncher = "./cardano-launcher " <> launcherArgs Launcher
     where
       appdata = "$HOME/Library/Application Support/Daedalus/"
 
-signInstaller :: T.Text -> T.Text -> IO ()
-signInstaller src dst = do
-  -- Sign the installer with a special macOS dance
-  run "security" ["create-keychain", "-p", "ci", "macos-build.keychain"]
-  run "security" ["default-keychain", "-s", "macos-build.keychain"]
-  exitcode <- shell "security import macos.p12 -P \"$CERT_PASS\" -k macos-build.keychain -T `which productsign`" mempty
-  unless (exitcode == ExitSuccess) $ error "Signing failed"
-  run "security" ["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", "ci", "macos-build.keychain"]
-  run "security" ["unlock-keychain", "-p", "ci", "macos-build.keychain"]
-  shells ("productsign --sign \"Developer ID Installer: Input Output HK Limited (89TW38X994)\" --keychain macos-build.keychain " <> toText src <> " " <> toText dst) mempty
+data SigningConfig = SigningConfig
+  { signingIdentity         :: T.Text
+  , signingCertificate      :: FilePath
+  , signingKeyChain         :: T.Text
+  , signingKeyChainPassword :: T.Text
+  } deriving (Show, Eq)
+
+signingConfig :: SigningConfig
+signingConfig = SigningConfig
+  { signingIdentity = "Developer ID Installer: Input Output HK Limited (89TW38X994)"
+  , signingCertificate = "macos.p12"
+  , signingKeyChain = "macos-build.keychain"
+  , signingKeyChainPassword = "ci"
+  }
+
+-- | Add our certificate to a new keychain.
+-- Uses the CERT_PASS environment variable to decrypt certificate.
+-- TODO: DEVOPS-643 Run the keychain setup separately
+setupKeyChain :: SigningConfig -> IO ()
+setupKeyChain cfg@SigningConfig{..} = do
+  password <- lookupEnv "CERT_PASS"
+  run "security" ["create-keychain", "-p", signingKeyChainPassword, signingKeyChain]
+  run "security" ["default-keychain", "-s", signingKeyChain]
+  importCertificate cfg password >>= \case
+    ExitSuccess ->
+      run "security" ["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", signingKeyChainPassword, signingKeyChain]
+    ExitFailure c -> do
+      deleteKeyChain cfg
+      die $ "Signing failed with status " ++ show c
+
+-- | Runs "security import"
+importCertificate :: SigningConfig -> Maybe String -> IO ExitCode
+importCertificate SigningConfig{..} password = do
+  let optArg s = map toText . maybe [] (\p -> [s, p])
+      certPass = optArg "-P" password
+  productSign <- optArg "-T" . fmap encodeString <$> which "productsign"
+  let args = ["import", toText signingCertificate, "-k", signingKeyChain] ++ certPass ++ productSign
+  -- echoCmd "security" args
+  proc "security" args mempty
+
+-- | Remove our certificate's keychain from store.
+deleteKeyChain :: SigningConfig -> IO ()
+deleteKeyChain SigningConfig{..} = void $ proc "security" ["delete-keychain", signingKeyChain] mempty
+
+signInstaller :: SigningConfig -> T.Text -> T.Text -> IO ()
+signInstaller cfg@SigningConfig{..} src dst = withUnlockedKeyChain cfg $ sign
+  where
+    sign = procs "productsign" [ "--sign", signingIdentity
+                               , "--keychain", signingKeyChain
+                               , toText src, toText dst ] mempty
+
+-- | Unlock the keychain, perform an action, lock keychain.
+withUnlockedKeyChain :: SigningConfig -> IO a -> IO a
+withUnlockedKeyChain SigningConfig{..} = bracket_ unlock lock
+  where
+    unlock = run "security" ["unlock-keychain", "-p", signingKeyChainPassword, signingKeyChain]
+    lock = run "security" ["lock-keychain", signingKeyChain]
+
+-- | Create a self-signed PKCS#12 certificate and import it to our
+-- keychain, for testing purposes.
+createDummyCertificate :: SigningConfig -> IO ()
+createDummyCertificate cfg@SigningConfig{..} = do
+  let pem = "key.pem"
+      cert = "macos.pem"
+  run "openssl" [ "req", "-newkey", "rsa:2048", "-nodes", "-keyout", pem, "-x509", "-days", "365"
+                , "-subj", "/C=UK/ST=Oxfordshire/L=Oxford/O=IOHK/OU=CI/CN=snakeoil"
+                , "-out", cert ]
+  run "openssl" ["pkcs12", "-inkey", pem, "-in", cert, "-export", "-out", toText signingCertificate]
+  deleteKeyChain cfg
+  setupKeyChain cfg
 
 run :: T.Text -> [T.Text] -> IO ()
 run cmd args = do
-    echo . unsafeTextToLine $ T.intercalate " " (cmd : args)
+    echoCmd cmd args
     procs cmd args mempty
+
+echoCmd :: T.Text -> [T.Text] -> IO ()
+echoCmd cmd args = echo . unsafeTextToLine $ T.intercalate " " (cmd : args)

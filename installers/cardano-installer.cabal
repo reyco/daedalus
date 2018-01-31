@@ -39,3 +39,29 @@ executable make-installer
                        -O2
   default-extensions: NoImplicitPrelude
                       OverloadedStrings
+
+executable load-certificate
+  main-is:             load-certificate.hs
+  other-modules:       MacInstaller
+  build-depends:       base
+                     , bytestring
+                     , directory
+                     , filepath
+                     , Glob
+                     , megaparsec
+                     , optparse-applicative
+                     , system-filepath
+                     , text
+                     , turtle
+                     , split
+                     , universum
+                     , yaml
+
+  default-language:    Haskell2010
+  ghc-options:         -threaded -rtsopts
+                       -Wall
+                       -fno-warn-orphans
+                       -with-rtsopts=-N
+                       -O2
+  default-extensions: NoImplicitPrelude
+                      OverloadedStrings
