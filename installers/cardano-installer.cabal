@@ -23,6 +23,7 @@ executable make-installer
                      , filepath
                      , megaparsec
                      , nsis
+                     , system-filepath
                      , temporary
                      , text
                      , turtle
