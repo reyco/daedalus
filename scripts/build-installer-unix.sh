@@ -3,7 +3,6 @@
 #   0. 'git'
 #   1. 'curl'
 #   2. 'nix-shell'
-#   3. 'stack'
 
 set -e
 
@@ -127,10 +126,6 @@ test -d "release/darwin-x64/Daedalus-darwin-x64" -a -n "${fast_impure}" || {
         nix-shell --no-build-output --cores 0 --max-jobs 4 --run "npm run package -- --icon installers/icons/256x256.png"
         echo "Size of Electron app is $(du -sh release)"
 }
-
-test -n "$(which stack)"     -a -n "${fast_impure}" ||
-        retry 5 bash -c "curl -L https://www.stackage.org/stack/${os}-x86_64 | \
-                         tar xz --strip-components=1 -C ~/.local/bin"
 
 cd installers
     # if test "${pr_id}" = "false" -a "${OS_NAME}" != "linux" # No Linux keys yet.
