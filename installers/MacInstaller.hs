@@ -212,8 +212,11 @@ setupKeyChain cfg@SigningConfig{..} = do
   run "security" ["create-keychain", "-p", signingKeyChainPassword, signingKeyChain]
   run "security" ["default-keychain", "-s", signingKeyChain]
   importCertificate cfg password >>= \case
-    ExitSuccess ->
-      run "security" ["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", signingKeyChainPassword, signingKeyChain]
+    ExitSuccess -> do
+      -- avoids modal dialogue popping up on sierra
+      let sierraFix = ["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", signingKeyChainPassword, signingKeyChain]
+      echoCmd "security" sierraFix
+      void $ proc "security" sierraFix mempty
     ExitFailure c -> do
       deleteKeyChain cfg
       die $ "Signing failed with status " ++ show c
@@ -254,7 +257,7 @@ createDummyCertificate cfg@SigningConfig{..} = do
       cert = "macos.pem"
       password = "dummy"
   run "openssl" [ "req", "-newkey", "rsa:2048", "-nodes", "-keyout", pem, "-x509", "-days", "365"
-                , "-subj", "/C=UK/ST=Oxfordshire/L=Oxford/O=IOHK/OU=CI/CN=snakeoil"
+                , "-subj", "/C=UK/ST=Oxfordshire/L=Oxford/O=IOHK/OU=CI/CN=" <> signingIdentity
                 , "-out", cert ]
   run "openssl" ["pkcs12", "-inkey", pem, "-in", cert, "-export"
                 , "-out", toText signingCertificate
