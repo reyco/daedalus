@@ -165,6 +165,4 @@ cd installers
                  linux )  echo "WARNING: installation testing not implemented on Linux" >&2;; esac; fi
 cd ..
 
-ls -laR installers/dist
-
 exit 0
