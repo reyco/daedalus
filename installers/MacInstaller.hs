@@ -67,11 +67,8 @@ main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
 
-  -- pr <- isJust <$> pullRequestFromEnv
-  let pr = False
+  pr <- isJust <$> pullRequestFromEnv
   cfg <- installerConfigFromEnv
-
-  unless pr $ createDummyCertificate signingConfig
 
   tempInstaller <- makeInstaller cfg
 
@@ -217,6 +214,10 @@ setupKeyChain cfg@SigningConfig{..} = do
       let sierraFix = ["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", signingKeyChainPassword, signingKeyChain]
       echoCmd "security" sierraFix
       void $ proc "security" sierraFix mempty
+      -- disables unlock timeout
+      run "security" ["set-keychain-settings", signingKeyChain]
+      -- for informational purposes
+      run "security" ["show-keychain-info", signingKeyChain]
     ExitFailure c -> do
       deleteKeyChain cfg
       die $ "Signing failed with status " ++ show c
