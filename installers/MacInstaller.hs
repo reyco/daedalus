@@ -17,7 +17,7 @@ import           Control.Monad (unless, liftM2)
 import           Data.Maybe (fromMaybe, isJust)
 import qualified Data.Text as T
 import           System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, renameFile)
-import           System.Environment (lookupEnv)
+import           System.Environment (lookupEnv, setEnv)
 import           System.FilePath ((</>), FilePath)
 import           System.FilePath.Glob (glob)
 import           Filesystem.Path.CurrentOS (encodeString)
@@ -252,10 +252,14 @@ createDummyCertificate :: SigningConfig -> IO ()
 createDummyCertificate cfg@SigningConfig{..} = do
   let pem = "key.pem"
       cert = "macos.pem"
+      password = "dummy"
   run "openssl" [ "req", "-newkey", "rsa:2048", "-nodes", "-keyout", pem, "-x509", "-days", "365"
                 , "-subj", "/C=UK/ST=Oxfordshire/L=Oxford/O=IOHK/OU=CI/CN=snakeoil"
                 , "-out", cert ]
-  run "openssl" ["pkcs12", "-inkey", pem, "-in", cert, "-export", "-out", toText signingCertificate]
+  run "openssl" ["pkcs12", "-inkey", pem, "-in", cert, "-export"
+                , "-out", toText signingCertificate
+                , "-passout", "pass:" <> toText password]
+  setEnv "CERT_PASS" password
   deleteKeyChain cfg
   setupKeyChain cfg
 
