@@ -4,7 +4,7 @@ const ExtractTextPlugin = require('extract-text-webpack-plugin');
 const AutoDllPlugin = require('autodll-webpack-plugin');
 
 module.exports = {
-  devtool: 'cheap-source-map',
+  devtool: 'cheap-module-eval-source-map',
   entry: './source/renderer/index.js',
   output: {
     path: path.join(__dirname, './dist/renderer'),
@@ -93,7 +93,6 @@ module.exports = {
           'pbkdf2',
           'qrcode.react',
           'react',
-          'react-addons-css-transition-group',
           'react-copy-to-clipboard',
           'react-css-themr',
           'react-dom',
